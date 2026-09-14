@@ -1,0 +1,62 @@
+[
+  {
+    "id": "eligibility-01",
+    "question": "Who is eligible for this scheme?",
+    "ground_truth": "The applicant must be a resident farmer with landholding records and a valid Aadhaar card."
+  },
+  {
+    "id": "eligibility-02",
+    "question": "Is Aadhaar required for eligibility?",
+    "ground_truth": "Yes, a valid Aadhaar card is required for eligible applicants."
+  },
+  {
+    "id": "application-01",
+    "question": "How do I apply for this scheme?",
+    "ground_truth": "Submit Form A at the tehsil office with identity proof, bank passbook, and land ownership documents."
+  },
+  {
+    "id": "application-02",
+    "question": "What documents are needed for the application process?",
+    "ground_truth": "Identity proof, bank passbook, and land ownership documents are required with Form A at the tehsil office."
+  },
+  {
+    "id": "application-03",
+    "question": "Where should Form A be submitted?",
+    "ground_truth": "Form A should be submitted at the tehsil office."
+  },
+  {
+    "id": "multi-01",
+    "question": "Who is eligible and how do I apply?",
+    "ground_truth": "Eligible resident farmers with landholding records and Aadhaar may apply by submitting Form A at the tehsil office with identity proof, bank passbook, and land ownership documents."
+  },
+  {
+    "id": "summary-01",
+    "question": "Summarize the scheme requirements.",
+    "ground_truth": "The scheme requires resident farmers with landholding records and Aadhaar to apply at the tehsil office using Form A and supporting documents."
+  },
+  {
+    "id": "land-01",
+    "question": "What land records are mentioned for eligibility?",
+    "ground_truth": "Landholding records are required for eligible applicants."
+  },
+  {
+    "id": "bank-01",
+    "question": "Is a bank passbook required when applying?",
+    "ground_truth": "Yes, a bank passbook is required when submitting the application."
+  },
+  {
+    "id": "out-of-scope-01",
+    "question": "What is the capital of France?",
+    "ground_truth": "The answer is not in this document."
+  },
+  {
+    "id": "out-of-scope-02",
+    "question": "What is the weather forecast for Delhi tomorrow?",
+    "ground_truth": "The answer is not in this document."
+  },
+  {
+    "id": "identity-01",
+    "question": "What identity proof is needed for application?",
+    "ground_truth": "Identity proof is required when submitting Form A at the tehsil office."
+  }
+]
