@@ -2,7 +2,7 @@
 
 Single-document RAG assistant: upload one public scheme PDF, ask eligibility and application-process questions, and get answers grounded in that document with cited source chunks.
 
-This repository is built step by step. **Step 2 (current):** local embeddings and FAISS retrieval.
+This repository is built step by step. **Step 3 (current):** LCEL RAG chain with OpenRouter LLM.
 
 ## Layout
 
@@ -62,6 +62,27 @@ python -m scripts.query_index "How do I apply?" -k 3
 ```
 
 The first embedding run downloads the MiniLM model (~90MB). Each result prints `score`, `chunk_index`, `source`, `page`, and a text preview.
+
+## Step 3: LCEL RAG chain
+
+Wire retrieval → prompt → LLM via LCEL. LLM uses OpenRouter (OpenAI-compatible API). Copy env template and add your key:
+
+```bash
+cd backend
+cp .env.example .env
+# set OPENROUTER_API_KEY in .env
+```
+
+Default model: `openai/gpt-4o-mini` (override with `OPENROUTER_MODEL`).
+
+Ask a question (requires built index from Step 2):
+
+```bash
+python -m scripts.ask_rag "Who is eligible for this scheme?"
+python -m scripts.ask_rag "What is the capital of France?"
+```
+
+Returns answer text plus source citations (`id`, `page`, `snippet`) from retrieved chunks. If the answer is not in the document, the model must respond with: `The answer is not in this document.`
 
 ### Tests
 

@@ -6,3 +6,5 @@ pytest
 sentence-transformers
 faiss-cpu
 numpy
+langchain-openai
+python-dotenv
