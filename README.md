@@ -1,182 +1,286 @@
 # Government Scheme Navigator
 
-Single-document RAG assistant: upload one public scheme PDF, ask eligibility and application-process questions, and get answers grounded in that document with cited source chunks.
+Upload one government scheme PDF, ask eligibility or application questions, and get answers grounded in that document with cited source chunks (page numbers + chunk text).
 
-This repository is built step by step. **Step 7 (current):** Streamlit UI + FastAPI endpoints.
+## Prerequisites
 
-## Layout
+| Requirement | Notes |
+|-------------|-------|
+| Python 3.12 | `python3 --version` |
+| OpenRouter API key | Free signup at [openrouter.ai](https://openrouter.ai). Used for answer generation. |
+| ~2 GB free disk | First run downloads embedding (~90 MB) and reranker (~100 MB) models. |
+| Internet | Required on first upload (model download) and for each question (LLM call). |
 
-- `backend/` — FastAPI + LangChain pipeline (ingestion lives here today)
-- `frontend/` — Streamlit UI calling the FastAPI backend
+No sample PDF is bundled. Use any text-based public scheme PDF (scanned image-only PDFs may not extract well).
 
-## Setup
+## Quick start (local)
 
-Python 3.12 virtual environments:
+Clone the repo, then run backend and frontend in **two terminals**.
+
+### 1. Backend
 
 ```bash
-# Backend (reuse if already created)
+git clone https://github.com/FarhanS311/agentic_ai_phase_1.git
+cd agentic_ai_phase_1
+
 python3 -m venv backend/venv
 backend/venv/bin/pip install -r backend/requirements.txt
 
-# Frontend
-python3 -m venv frontend/venv
-frontend/venv/bin/pip install -r frontend/requirements.txt
-```
-
-Activate the backend env:
-
-```bash
-source backend/venv/bin/activate
-```
-
-## Step 1: Ingestion and chunking
-
-Load a PDF with LangChain `PyPDFLoader`, split each page with `RecursiveCharacterTextSplitter` (`chunk_size=2500`, `chunk_overlap=300`), and keep metadata: source filename, 1-based page number, chunk index.
-
-Print chunks to the console:
-
-```bash
-cd backend
-source venv/bin/activate
-python -m scripts.ingest_pdf /path/to/scheme.pdf
-```
-
-Each printed block includes `chunk_index`, `source`, `page`, character length, and the chunk text.
-
-## Step 2: Embeddings and FAISS index
-
-Embed chunks with `sentence-transformers/all-MiniLM-L6-v2` (no API key). Build a FAISS `IndexFlatIP` index with normalized vectors; persist to `backend/data/index/` so the corpus is not re-embedded on restart.
-
-Build index from a PDF:
-
-```bash
-cd backend
-source venv/bin/activate
-python -m scripts.build_index /path/to/scheme.pdf
-```
-
-Query the persisted index:
-
-```bash
-python -m scripts.query_index "Who is eligible for this scheme?" -k 3
-python -m scripts.query_index "How do I apply?" -k 3
-```
-
-The first embedding run downloads the MiniLM model (~90MB). Each result prints `score`, `chunk_index`, `source`, `page`, and a text preview.
-
-## Step 3: LCEL RAG chain
-
-Wire retrieval → prompt → LLM via LCEL. LLM uses OpenRouter (OpenAI-compatible API). Copy env template and add your key:
-
-```bash
 cd backend
 cp .env.example .env
-# set OPENROUTER_API_KEY in .env
 ```
 
-Default model: `openai/gpt-4o-mini` (override with `OPENROUTER_MODEL`).
+Edit `backend/.env` and set your key:
 
-Ask a question (requires built index from Step 2):
-
-```bash
-python -m scripts.ask_rag "Who is eligible for this scheme?"
-python -m scripts.ask_rag "What is the capital of France?"
+```env
+OPENROUTER_API_KEY=sk-or-v1-your-key-here
 ```
 
-Returns answer text plus source citations (`id`, `page`, `snippet`) from retrieved chunks. If the answer is not in the document, the model must respond with: `The answer is not in this document.`
-
-## Step 4: Query routing / decomposition
-
-Before retrieval, one router LLM call classifies the question as `single_fact`, `multi_part`, or `summarization` and returns JSON sub-queries. Multi-part questions split into separate searches; results merge (deduped by chunk id) before answer generation.
+Start the API:
 
 ```bash
-python -m scripts.ask_rag "Who is eligible and how do I apply?"
-```
-
-CLI now prints `query_type` and `sub_queries`. Multi-part answers should cite sources from multiple pages/chunks.
-
-## Step 5: Cross-encoder re-ranking
-
-After FAISS retrieves top-N candidates (`N=20`), `cross-encoder/ms-marco-MiniLM-L-6-v2` re-scores chunks against the user question. Top `k` re-ranked chunks go to the LLM.
-
-```bash
-python -m scripts.ask_rag "What documents are needed for the application process?"
-```
-
-CLI prints before/after rank table and appends JSONL logs to `backend/data/logs/rerank.jsonl`.
-
-Example where re-ranking changes rank-1 (bi-encoder favored eligibility chunk; cross-encoder promoted application chunk):
-
-See [docs/rerank-before-after.txt](docs/rerank-before-after.txt).
-
-First cross-encoder run downloads model (~100MB).
-
-## Step 6: RAGAS evaluation
-
-Batch-evaluate the RAG pipeline against a committed golden set (`backend/data/eval/golden_set.json`, 12 labeled question/`ground_truth` pairs). For each question, `run_eval` calls the full `ask_question` pipeline, scores with RAGAS (`faithfulness`, `answer_relevancy`, `context_precision`), appends JSONL logs, and prints a metrics table.
-
-Build the FAISS index from the same scheme PDF used in tests before running eval:
-
-```bash
-cd backend
 source venv/bin/activate
-python -m scripts.build_index /path/to/scheme.pdf   # once
-python -m scripts.run_eval
-python -m scripts.run_eval --golden-set data/eval/golden_set.json --index-dir data/index
-```
-
-Example output:
-
-```
-| id               | faithfulness | answer_relevancy | context_precision |
-|------------------|--------------|------------------|-------------------|
-| eligibility-01   | 0.91         | 0.87             | 0.80              |
-| MEAN             | 0.85         | 0.82             | 0.78              |
-
-Logged 12 evaluation(s) to data/logs/ragas.jsonl
-```
-
-RAGAS uses OpenRouter (same LLM as the RAG chain). Each golden-set question triggers several LLM calls for scoring.
-
-## Step 7: Frontend and source attribution UI
-
-FastAPI exposes the pipeline to a Streamlit UI. Upload a PDF in the browser, ask questions, see answers with an expandable **Sources** panel (page numbers + chunk text).
-
-### Backend API
-
-```bash
-cd backend
-source venv/bin/activate
-cp .env.example .env   # set OPENROUTER_API_KEY
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Endpoints:
+Leave this terminal running. API docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
-- `GET /api/status` — whether a document is indexed
-- `POST /api/upload` — multipart PDF upload; ingests and builds FAISS index
-- `POST /api/ask` — JSON `{ "question": "...", "k": 4 }`; returns answer + sources
+### 2. Frontend
 
-### Streamlit UI
-
-In a second terminal:
+Open a **second terminal**:
 
 ```bash
-cd frontend
+cd agentic_ai_phase_1/frontend
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
 source venv/bin/activate
 streamlit run app.py
 ```
 
-Opens at `http://localhost:8501`. Optional env: `BACKEND_URL=http://127.0.0.1:8000` (default).
+Browser opens at [http://localhost:8501](http://localhost:8501).
 
-**Reviewer checklist:** upload scheme PDF, ask an eligibility or application question, confirm answer cites the document and **Sources** expanders show page + chunk text.
+Optional: point Streamlit at a different backend with `BACKEND_URL=http://127.0.0.1:8000` (default).
 
-First upload may be slow while embedding (~90MB) and reranker (~100MB) models download.
+### 3. Demo the app
 
-### Tests
+1. Upload a scheme PDF in the browser (first upload may take 1–3 minutes while models download).
+2. Wait for the success message showing chunk count.
+3. Ask a question, e.g. *Who is eligible for this scheme?* or *How do I apply?*
+4. Read the answer, then expand **Sources** to see page numbers and cited chunk text.
+
+If the answer is not in the document, the model responds with: `The answer is not in this document.`
+
+## Reviewer checklist
+
+- [ ] Backend running on port 8000 (`GET http://127.0.0.1:8000/api/status` returns JSON)
+- [ ] Streamlit UI open on port 8501
+- [ ] PDF uploads without error
+- [ ] Question returns a grounded answer
+- [ ] **Sources** panel shows page number, chunk id, and chunk text
+
+## Architecture
+
+Single-document RAG pipeline: one PDF at a time. A new upload replaces the previous index.
+
+```mermaid
+flowchart LR
+  user[User] --> ui[Streamlit UI]
+  ui --> api[FastAPI]
+  api --> ingest[PDF ingest and chunk]
+  ingest --> faiss[FAISS index]
+  api --> route[Query router]
+  route --> retrieve[FAISS retrieve]
+  retrieve --> rerank[Cross-encoder rerank]
+  rerank --> llm[OpenRouter LLM]
+  llm --> response[Answer and sources]
+  response --> ui
+```
+
+**Flow summary**
+
+1. **Upload** — PDF is chunked (2500 chars, 300 overlap), embedded, and stored in a local FAISS index.
+2. **Ask** — Question is routed (single / multi-part / summary), relevant chunks are retrieved and reranked, then an LLM generates an answer using only retrieved context.
+3. **Sources** — Citations come from retrieved chunks (not LLM-generated); each source includes page number and chunk text.
+
+## Tech stack
+
+| Layer | Technology |
+|-------|------------|
+| Frontend | Streamlit, httpx |
+| API | FastAPI, Uvicorn |
+| Orchestration | LangChain LCEL |
+| PDF parsing | PyPDF (LangChain loader) |
+| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` |
+| Vector store | FAISS (`IndexFlatIP`, local disk) |
+| Reranking | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
+| LLM | OpenRouter (`openai/gpt-4o-mini` default) |
+| Config | python-dotenv (`.env`) |
+| Tests | pytest |
+
+## Project layout
+
+```
+agentic_ai_phase_1/
+├── backend/
+│   ├── app/           # RAG pipeline + FastAPI routes
+│   ├── scripts/       # CLI tools for development (optional)
+│   ├── data/index/    # FAISS index (created on upload, gitignored)
+│   └── .env           # secrets (copy from .env.example)
+└── frontend/
+    └── app.py         # Streamlit UI
+```
+
+## Configuration
+
+Copy `backend/.env.example` to `backend/.env`:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OPENROUTER_API_KEY` | Yes | — | API key from OpenRouter |
+| `OPENROUTER_BASE_URL` | No | `https://openrouter.ai/api/v1` | OpenAI-compatible base URL |
+| `OPENROUTER_MODEL` | No | `openai/gpt-4o-mini` | Model used for routing and answers |
+| `BACKEND_URL` | No | `http://127.0.0.1:8000` | Frontend only; API base URL |
+
+## API reference
+
+Base URL: `http://127.0.0.1:8000`
+
+Interactive docs: `/docs` (Swagger) and `/redoc`
+
+### `GET /api/status`
+
+Returns whether a document is indexed.
+
+**Response 200**
+
+```json
+{
+  "ready": true,
+  "filename": "scheme.pdf",
+  "chunk_count": 12
+}
+```
+
+When no document is loaded: `"ready": false`, `"filename": null`, `"chunk_count": null`.
+
+---
+
+### `POST /api/upload`
+
+Upload and index a PDF. Replaces any previously indexed document.
+
+**Request** — `multipart/form-data`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | file | PDF file |
+
+**Response 200**
+
+```json
+{
+  "filename": "scheme.pdf",
+  "chunk_count": 12,
+  "message": "Indexed 12 chunk(s) from scheme.pdf"
+}
+```
+
+**Errors**
+
+| Status | Cause |
+|--------|-------|
+| 400 | Not a PDF or empty file |
+| 422 | PDF has no extractable text |
+
+**Example (curl)**
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/upload \
+  -F "file=@/path/to/scheme.pdf"
+```
+
+---
+
+### `POST /api/ask`
+
+Ask a question against the indexed document.
+
+**Request** — `application/json`
+
+```json
+{
+  "question": "Who is eligible for this scheme?",
+  "k": 4
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `question` | string | Yes | — | User question (min 1 char) |
+| `k` | integer | No | 4 | Number of chunks sent to LLM (1–20) |
+
+**Response 200**
+
+```json
+{
+  "answer": "Eligible applicants must be resident farmers with valid land records.",
+  "query_type": "single_fact",
+  "sub_queries": ["Who is eligible for this scheme?"],
+  "sources": [
+    {
+      "id": 0,
+      "page": 1,
+      "snippet": "Eligibility: applicant must be a resident farmer...",
+      "text": "Eligibility: applicant must be a resident farmer with landholding records."
+    }
+  ]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `query_type` | `single_fact`, `multi_part`, or `summarization` |
+| `sub_queries` | Sub-questions used for retrieval |
+| `sources[].id` | Chunk index in the document |
+| `sources[].page` | 1-based PDF page number |
+| `sources[].snippet` | First 200 characters of chunk |
+| `sources[].text` | Full chunk text for UI display |
+
+**Errors**
+
+| Status | Cause |
+|--------|-------|
+| 409 | No document indexed; upload a PDF first |
+| 422 | Invalid request body |
+
+**Example (curl)**
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How do I apply?", "k": 4}'
+```
+
+## Tests
 
 ```bash
 cd backend
 source venv/bin/activate
 pytest
 ```
+
+Tests use mocked LLMs where possible; no live OpenRouter calls required for the default suite.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `Cannot reach backend` in Streamlit | Start uvicorn first (`cd backend && uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`) |
+| `OPENROUTER_API_KEY is not set` | Create `backend/.env` from `.env.example` and set the key |
+| Upload hangs on first run | Normal — embedding and reranker models are downloading |
+| Empty or wrong chunks | Use a text-based PDF, not a scanned image |
+| `409` on `/api/ask` | Upload a PDF before asking a question |
+
+## Development CLI (optional)
+
+The `backend/scripts/` folder has CLI tools for pipeline debugging (`ingest_pdf`, `build_index`, `query_index`, `ask_rag`). The Streamlit UI is the primary demo path; you do not need these scripts to run the app.
