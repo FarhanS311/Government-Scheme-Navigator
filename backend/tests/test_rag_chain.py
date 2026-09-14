@@ -10,6 +10,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from app.config import get_llm
 from app.ingestion import Chunk
 from app.query_router import RouteResult
+from app.reranker import RerankEntry
 from app.rag_chain import (
     NOT_IN_DOCUMENT_PHRASE,
     _format_context,
@@ -46,6 +47,24 @@ def _sample_chunks() -> list[Chunk]:
 
 def _scored_chunks() -> list[ScoredChunk]:
     return [ScoredChunk(chunk=chunk, score=0.9 - index * 0.1) for index, chunk in enumerate(_sample_chunks())]
+
+
+def _passthrough_rerank(
+    question: str, scored: list[ScoredChunk], top_k: int = 4, cross_encoder: object = None
+) -> tuple[list[ScoredChunk], list[RerankEntry]]:
+    ordered = sorted(scored, key=lambda item: item.score, reverse=True)[:top_k]
+    entries = [
+        RerankEntry(
+            chunk_index=item.chunk.chunk_index,
+            page=item.chunk.page_number,
+            bi_encoder_score=item.score,
+            cross_encoder_score=item.score,
+            rank_before=index + 1,
+            rank_after=index + 1,
+        )
+        for index, item in enumerate(ordered)
+    ]
+    return ordered, entries
 
 
 @pytest.fixture
@@ -86,8 +105,11 @@ def test_to_citations_maps_fields() -> None:
     assert citations[0].snippet == "x" * 200
 
 
+@patch("app.rag_chain.rerank_chunks", side_effect=_passthrough_rerank)
 @patch("app.rag_chain.route_query")
-def test_ask_question_in_scope(mock_route: object, indexed_dir: Path) -> None:
+def test_ask_question_in_scope(
+    mock_route: object, mock_rerank: object, indexed_dir: Path
+) -> None:
     mock_route.return_value = RouteResult(
         query_type="single_fact",
         sub_queries=["Who is eligible for this scheme?"],
@@ -111,8 +133,11 @@ def test_ask_question_in_scope(mock_route: object, indexed_dir: Path) -> None:
     assert result.query_type == "single_fact"
 
 
+@patch("app.rag_chain.rerank_chunks", side_effect=_passthrough_rerank)
 @patch("app.rag_chain.route_query")
-def test_ask_question_out_of_scope(mock_route: object, indexed_dir: Path) -> None:
+def test_ask_question_out_of_scope(
+    mock_route: object, mock_rerank: object, indexed_dir: Path
+) -> None:
     mock_route.return_value = RouteResult(
         query_type="single_fact",
         sub_queries=["What is the capital of France?"],
@@ -148,9 +173,10 @@ def test_merge_scored_chunks_dedupes_by_chunk_index() -> None:
     assert merged[1].chunk.chunk_index == 1
 
 
+@patch("app.rag_chain.rerank_chunks", side_effect=_passthrough_rerank)
 @patch("app.rag_chain.route_query")
 def test_multi_part_retrieves_both_chunk_groups(
-    mock_route: object, indexed_dir: Path
+    mock_route: object, mock_rerank: object, indexed_dir: Path
 ) -> None:
     mock_route.return_value = RouteResult(
         query_type="multi_part",
@@ -187,6 +213,23 @@ def test_retrieve_multi_merges_sub_queries(indexed_dir: Path) -> None:
     chunk_indexes = {item.chunk.chunk_index for item in scored}
     assert 0 in chunk_indexes
     assert 1 in chunk_indexes
+
+
+@patch("app.rag_chain.rerank_chunks", side_effect=_passthrough_rerank)
+@patch("app.rag_chain.route_query")
+def test_ask_question_includes_rerank_log(
+    mock_route: object, mock_rerank: object, indexed_dir: Path
+) -> None:
+    mock_route.return_value = RouteResult(
+        query_type="single_fact",
+        sub_queries=["Who is eligible?"],
+    )
+    fake_llm = FakeListChatModel(responses=["Eligible farmers on page 1."])
+    index = load_index(indexed_dir)
+    result = ask_question("Who is eligible?", index, llm=fake_llm, k=2)
+
+    assert result.rerank_log
+    mock_rerank.assert_called_once()
 
 
 def test_missing_api_key_raises() -> None:

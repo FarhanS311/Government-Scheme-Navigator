@@ -2,7 +2,7 @@
 
 Single-document RAG assistant: upload one public scheme PDF, ask eligibility and application-process questions, and get answers grounded in that document with cited source chunks.
 
-This repository is built step by step. **Step 4 (current):** query routing and decomposition.
+This repository is built step by step. **Step 5 (current):** cross-encoder re-ranking.
 
 ## Layout
 
@@ -93,6 +93,22 @@ python -m scripts.ask_rag "Who is eligible and how do I apply?"
 ```
 
 CLI now prints `query_type` and `sub_queries`. Multi-part answers should cite sources from multiple pages/chunks.
+
+## Step 5: Cross-encoder re-ranking
+
+After FAISS retrieves top-N candidates (`N=20`), `cross-encoder/ms-marco-MiniLM-L-6-v2` re-scores chunks against the user question. Top `k` re-ranked chunks go to the LLM.
+
+```bash
+python -m scripts.ask_rag "What documents are needed for the application process?"
+```
+
+CLI prints before/after rank table and appends JSONL logs to `backend/data/logs/rerank.jsonl`.
+
+Example where re-ranking changes rank-1 (bi-encoder favored eligibility chunk; cross-encoder promoted application chunk):
+
+See [docs/rerank-before-after.txt](docs/rerank-before-after.txt).
+
+First cross-encoder run downloads model (~100MB).
 
 ### Tests
 

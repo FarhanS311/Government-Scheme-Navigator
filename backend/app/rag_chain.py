@@ -9,6 +9,7 @@ from langchain_core.runnables import Runnable, RunnableLambda, RunnablePassthrou
 
 from app.config import get_llm
 from app.query_router import route_query
+from app.reranker import RERANK_TOP_N, RerankEntry, rerank_chunks
 from app.vector_store import ScoredChunk, VectorIndex
 
 NOT_IN_DOCUMENT_PHRASE = "The answer is not in this document."
@@ -46,6 +47,7 @@ class RAGAnswer:
     sources: list[SourceCitation]
     query_type: str = "single_fact"
     sub_queries: list[str] = field(default_factory=list)
+    rerank_log: list[RerankEntry] = field(default_factory=list)
 
 
 def _format_context(scored: list[ScoredChunk]) -> str:
@@ -105,13 +107,15 @@ def create_rag_chain(
     def retrieve_step(inputs: dict[str, str]) -> dict[str, object]:
         question = inputs["question"]
         route = route_query(question, llm)
-        scored = _retrieve_multi(vector_index, route.sub_queries, k)
+        scored = _retrieve_multi(vector_index, route.sub_queries, k=RERANK_TOP_N)
+        reranked, rerank_log = rerank_chunks(question, scored, top_k=k)
         return {
             "question": question,
-            "context": _format_context(scored),
-            "sources": _to_citations(scored),
+            "context": _format_context(reranked),
+            "sources": _to_citations(reranked),
             "query_type": route.query_type,
             "sub_queries": route.sub_queries,
+            "rerank_log": rerank_log,
         }
 
     def build_answer_chain(query_type: str) -> Runnable:
@@ -152,6 +156,7 @@ def create_rag_chain(
                 sources=state["sources"],
                 query_type=state["query_type"],
                 sub_queries=state["sub_queries"],
+                rerank_log=state["rerank_log"],
             )
         )
     )

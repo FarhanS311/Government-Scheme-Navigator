@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from app.rag_chain import ask_question
+from app.reranker import format_rerank_comparison, log_rerank_to_jsonl
 from app.vector_store import DEFAULT_INDEX_DIR, load_index
 
 
@@ -33,6 +34,10 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Question: {args.question}")
     print(f"Query type: {result.query_type}")
     print(f"Sub-queries: {json.dumps(result.sub_queries, ensure_ascii=True)}")
+    if result.rerank_log:
+        print("=" * 60)
+        print(format_rerank_comparison(args.question, result.rerank_log))
+        log_rerank_to_jsonl(args.question, result.rerank_log)
     print("=" * 60)
     print("Answer:")
     print(result.answer)

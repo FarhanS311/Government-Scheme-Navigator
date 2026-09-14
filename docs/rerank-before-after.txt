@@ -1,0 +1,4 @@
+Re-rank (query: "What documents are needed for the application process?")
+BEFORE                          AFTER
+#1 chunk=0 page=1 score=0.4100  #1 chunk=1 page=2 score=5.4788
+#2 chunk=1 page=2 score=0.3800  #2 chunk=0 page=1 score=-1.6497
