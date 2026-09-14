@@ -2,7 +2,7 @@
 
 Single-document RAG assistant: upload one public scheme PDF, ask eligibility and application-process questions, and get answers grounded in that document with cited source chunks.
 
-This repository is built step by step. **Step 1 (current):** PDF ingestion and chunking.
+This repository is built step by step. **Step 2 (current):** local embeddings and FAISS retrieval.
 
 ## Layout
 
@@ -41,6 +41,27 @@ python -m scripts.ingest_pdf /path/to/scheme.pdf
 ```
 
 Each printed block includes `chunk_index`, `source`, `page`, character length, and the chunk text.
+
+## Step 2: Embeddings and FAISS index
+
+Embed chunks with `sentence-transformers/all-MiniLM-L6-v2` (no API key). Build a FAISS `IndexFlatIP` index with normalized vectors; persist to `backend/data/index/` so the corpus is not re-embedded on restart.
+
+Build index from a PDF:
+
+```bash
+cd backend
+source venv/bin/activate
+python -m scripts.build_index /path/to/scheme.pdf
+```
+
+Query the persisted index:
+
+```bash
+python -m scripts.query_index "Who is eligible for this scheme?" -k 3
+python -m scripts.query_index "How do I apply?" -k 3
+```
+
+The first embedding run downloads the MiniLM model (~90MB). Each result prints `score`, `chunk_index`, `source`, `page`, and a text preview.
 
 ### Tests
 

@@ -1,4 +1,8 @@
 langchain-community
 langchain-text-splitters
+langchain-huggingface
 pypdf
 pytest
+sentence-transformers
+faiss-cpu
+numpy
