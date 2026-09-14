@@ -9,9 +9,12 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from app.config import get_llm
 from app.ingestion import Chunk
+from app.query_router import RouteResult
 from app.rag_chain import (
     NOT_IN_DOCUMENT_PHRASE,
     _format_context,
+    _merge_scored_chunks,
+    _retrieve_multi,
     _to_citations,
     ask_question,
 )
@@ -83,7 +86,12 @@ def test_to_citations_maps_fields() -> None:
     assert citations[0].snippet == "x" * 200
 
 
-def test_ask_question_in_scope(indexed_dir: Path) -> None:
+@patch("app.rag_chain.route_query")
+def test_ask_question_in_scope(mock_route: object, indexed_dir: Path) -> None:
+    mock_route.return_value = RouteResult(
+        query_type="single_fact",
+        sub_queries=["Who is eligible for this scheme?"],
+    )
     fake_llm = FakeListChatModel(
         responses=[
             "Applicants must be resident farmers with landholding records and Aadhaar (page 1)."
@@ -100,9 +108,15 @@ def test_ask_question_in_scope(indexed_dir: Path) -> None:
     assert "resident farmer" in result.answer.lower()
     assert result.sources
     assert any(source.page == 1 for source in result.sources)
+    assert result.query_type == "single_fact"
 
 
-def test_ask_question_out_of_scope(indexed_dir: Path) -> None:
+@patch("app.rag_chain.route_query")
+def test_ask_question_out_of_scope(mock_route: object, indexed_dir: Path) -> None:
+    mock_route.return_value = RouteResult(
+        query_type="single_fact",
+        sub_queries=["What is the capital of France?"],
+    )
     fake_llm = FakeListChatModel(responses=[NOT_IN_DOCUMENT_PHRASE])
     index = load_index(indexed_dir)
     result = ask_question(
@@ -114,6 +128,65 @@ def test_ask_question_out_of_scope(indexed_dir: Path) -> None:
 
     assert result.answer == NOT_IN_DOCUMENT_PHRASE
     assert result.sources
+
+
+def test_merge_scored_chunks_dedupes_by_chunk_index() -> None:
+    chunk_a = _sample_chunks()[0]
+    chunk_b = _sample_chunks()[1]
+    merged = _merge_scored_chunks(
+        [
+            ScoredChunk(chunk=chunk_a, score=0.5),
+            ScoredChunk(chunk=chunk_a, score=0.9),
+            ScoredChunk(chunk=chunk_b, score=0.7),
+        ],
+        k=2,
+    )
+
+    assert len(merged) == 2
+    assert merged[0].chunk.chunk_index == 0
+    assert merged[0].score == 0.9
+    assert merged[1].chunk.chunk_index == 1
+
+
+@patch("app.rag_chain.route_query")
+def test_multi_part_retrieves_both_chunk_groups(
+    mock_route: object, indexed_dir: Path
+) -> None:
+    mock_route.return_value = RouteResult(
+        query_type="multi_part",
+        sub_queries=["eligibility criteria", "application process"],
+    )
+    fake_llm = FakeListChatModel(
+        responses=[
+            "Eligibility is on page 1. Apply using Form A at the tehsil office on page 2."
+        ]
+    )
+    index = load_index(indexed_dir)
+    result = ask_question(
+        "What is eligibility and how do you apply?",
+        index,
+        llm=fake_llm,
+        k=2,
+    )
+
+    assert result.query_type == "multi_part"
+    assert len(result.sub_queries) >= 2
+    source_ids = {source.id for source in result.sources}
+    assert 0 in source_ids
+    assert 1 in source_ids
+
+
+def test_retrieve_multi_merges_sub_queries(indexed_dir: Path) -> None:
+    index = load_index(indexed_dir)
+    scored = _retrieve_multi(
+        index,
+        ["eligibility criteria", "application process"],
+        k=2,
+    )
+
+    chunk_indexes = {item.chunk.chunk_index for item in scored}
+    assert 0 in chunk_indexes
+    assert 1 in chunk_indexes
 
 
 def test_missing_api_key_raises() -> None:

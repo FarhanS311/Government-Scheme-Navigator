@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
@@ -8,6 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable, RunnableLambda, RunnablePassthrough
 
 from app.config import get_llm
+from app.query_router import route_query
 from app.vector_store import ScoredChunk, VectorIndex
 
 NOT_IN_DOCUMENT_PHRASE = "The answer is not in this document."
@@ -22,7 +23,7 @@ Rules:
 - If the context does not contain enough information to answer, respond with exactly:
   "{not_in_document_phrase}"
 - When you can answer, mention relevant page numbers from the context when helpful.
-- Be concise and factual."""
+- Be concise and factual.{summary_hint}"""
 
 HUMAN_PROMPT = """Context:
 {context}
@@ -43,6 +44,8 @@ class SourceCitation:
 class RAGAnswer:
     answer: str
     sources: list[SourceCitation]
+    query_type: str = "single_fact"
+    sub_queries: list[str] = field(default_factory=list)
 
 
 def _format_context(scored: list[ScoredChunk]) -> str:
@@ -68,15 +71,30 @@ def _to_citations(
     ]
 
 
-def _retrieve(
-    vector_index: VectorIndex, question: str, k: int
-) -> dict[str, object]:
-    scored = vector_index.query_index(question, k=k)
-    return {
-        "question": question,
-        "context": _format_context(scored),
-        "sources": _to_citations(scored),
-    }
+def _merge_scored_chunks(chunks: list[ScoredChunk], k: int) -> list[ScoredChunk]:
+    best_by_index: dict[int, ScoredChunk] = {}
+    for item in chunks:
+        chunk_index = item.chunk.chunk_index
+        existing = best_by_index.get(chunk_index)
+        if existing is None or item.score > existing.score:
+            best_by_index[chunk_index] = item
+    merged = sorted(best_by_index.values(), key=lambda item: item.score, reverse=True)
+    return merged[:k]
+
+
+def _retrieve_multi(
+    vector_index: VectorIndex, sub_queries: list[str], k: int
+) -> list[ScoredChunk]:
+    all_scored: list[ScoredChunk] = []
+    for sub_query in sub_queries:
+        all_scored.extend(vector_index.query_index(sub_query, k=k))
+    return _merge_scored_chunks(all_scored, k)
+
+
+def _summary_hint(query_type: str) -> str:
+    if query_type == "summarization":
+        return "\n- The user wants a concise summary drawn only from the context."
+    return ""
 
 
 def create_rag_chain(
@@ -84,33 +102,56 @@ def create_rag_chain(
     llm: BaseChatModel,
     k: int = DEFAULT_RETRIEVAL_K,
 ) -> Runnable:
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                SYSTEM_PROMPT.format(not_in_document_phrase=NOT_IN_DOCUMENT_PHRASE),
-            ),
-            ("human", HUMAN_PROMPT),
-        ]
-    )
-
     def retrieve_step(inputs: dict[str, str]) -> dict[str, object]:
-        return _retrieve(vector_index, inputs["question"], k)
+        question = inputs["question"]
+        route = route_query(question, llm)
+        scored = _retrieve_multi(vector_index, route.sub_queries, k)
+        return {
+            "question": question,
+            "context": _format_context(scored),
+            "sources": _to_citations(scored),
+            "query_type": route.query_type,
+            "sub_queries": route.sub_queries,
+        }
 
-    answer_chain = (
-        RunnableLambda(lambda state: {"question": state["question"], "context": state["context"]})
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
+    def build_answer_chain(query_type: str) -> Runnable:
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    SYSTEM_PROMPT.format(
+                        not_in_document_phrase=NOT_IN_DOCUMENT_PHRASE,
+                        summary_hint=_summary_hint(query_type),
+                    ),
+                ),
+                ("human", HUMAN_PROMPT),
+            ]
+        )
+        return (
+            RunnableLambda(
+                lambda state: {
+                    "question": state["question"],
+                    "context": state["context"],
+                }
+            )
+            | prompt
+            | llm
+            | StrOutputParser()
+        )
+
+    def answer_step(state: dict[str, object]) -> str:
+        chain = build_answer_chain(str(state["query_type"]))
+        return chain.invoke(state)
 
     return (
         RunnableLambda(retrieve_step)
-        | RunnablePassthrough.assign(answer_text=answer_chain)
+        | RunnablePassthrough.assign(answer_text=RunnableLambda(answer_step))
         | RunnableLambda(
             lambda state: RAGAnswer(
                 answer=state["answer_text"],
                 sources=state["sources"],
+                query_type=state["query_type"],
+                sub_queries=state["sub_queries"],
             )
         )
     )

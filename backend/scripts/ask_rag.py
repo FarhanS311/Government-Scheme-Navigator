@@ -31,6 +31,8 @@ def main(argv: list[str] | None = None) -> None:
     result = ask_question(args.question, index, k=args.k)
 
     print(f"Question: {args.question}")
+    print(f"Query type: {result.query_type}")
+    print(f"Sub-queries: {json.dumps(result.sub_queries, ensure_ascii=True)}")
     print("=" * 60)
     print("Answer:")
     print(result.answer)

@@ -2,7 +2,7 @@
 
 Single-document RAG assistant: upload one public scheme PDF, ask eligibility and application-process questions, and get answers grounded in that document with cited source chunks.
 
-This repository is built step by step. **Step 3 (current):** LCEL RAG chain with OpenRouter LLM.
+This repository is built step by step. **Step 4 (current):** query routing and decomposition.
 
 ## Layout
 
@@ -83,6 +83,16 @@ python -m scripts.ask_rag "What is the capital of France?"
 ```
 
 Returns answer text plus source citations (`id`, `page`, `snippet`) from retrieved chunks. If the answer is not in the document, the model must respond with: `The answer is not in this document.`
+
+## Step 4: Query routing / decomposition
+
+Before retrieval, one router LLM call classifies the question as `single_fact`, `multi_part`, or `summarization` and returns JSON sub-queries. Multi-part questions split into separate searches; results merge (deduped by chunk id) before answer generation.
+
+```bash
+python -m scripts.ask_rag "Who is eligible and how do I apply?"
+```
+
+CLI now prints `query_type` and `sub_queries`. Multi-part answers should cite sources from multiple pages/chunks.
 
 ### Tests
 
