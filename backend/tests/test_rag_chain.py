@@ -232,6 +232,23 @@ def test_ask_question_includes_rerank_log(
     mock_rerank.assert_called_once()
 
 
+@patch("app.rag_chain.rerank_chunks", side_effect=_passthrough_rerank)
+@patch("app.rag_chain.route_query")
+def test_rag_answer_includes_contexts(
+    mock_route: object, mock_rerank: object, indexed_dir: Path
+) -> None:
+    mock_route.return_value = RouteResult(
+        query_type="single_fact",
+        sub_queries=["Who is eligible?"],
+    )
+    fake_llm = FakeListChatModel(responses=["Eligible farmers on page 1."])
+    index = load_index(indexed_dir)
+    result = ask_question("Who is eligible?", index, llm=fake_llm, k=2)
+
+    assert result.contexts
+    assert any("Eligibility criteria" in context for context in result.contexts)
+
+
 def test_missing_api_key_raises() -> None:
     with patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}, clear=False):
         with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):

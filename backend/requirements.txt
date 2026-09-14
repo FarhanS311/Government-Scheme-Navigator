@@ -1,4 +1,4 @@
-langchain-community
+langchain-community==0.3.31  # ragas 0.4.3 needs chat_models.vertexai (removed in 0.4.x)
 langchain-text-splitters
 langchain-huggingface
 pypdf
@@ -8,3 +8,8 @@ faiss-cpu
 numpy
 langchain-openai
 python-dotenv
+ragas
+datasets
+fastapi
+uvicorn[standard]
+python-multipart

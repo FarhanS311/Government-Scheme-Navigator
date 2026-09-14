@@ -2,12 +2,12 @@
 
 Single-document RAG assistant: upload one public scheme PDF, ask eligibility and application-process questions, and get answers grounded in that document with cited source chunks.
 
-This repository is built step by step. **Step 5 (current):** cross-encoder re-ranking.
+This repository is built step by step. **Step 7 (current):** Streamlit UI + FastAPI endpoints.
 
 ## Layout
 
 - `backend/` — FastAPI + LangChain pipeline (ingestion lives here today)
-- `frontend/` — Streamlit/HTML UI (venv only for now)
+- `frontend/` — Streamlit UI calling the FastAPI backend
 
 ## Setup
 
@@ -18,8 +18,9 @@ Python 3.12 virtual environments:
 python3 -m venv backend/venv
 backend/venv/bin/pip install -r backend/requirements.txt
 
-# Frontend (no app dependencies yet)
+# Frontend
 python3 -m venv frontend/venv
+frontend/venv/bin/pip install -r frontend/requirements.txt
 ```
 
 Activate the backend env:
@@ -109,6 +110,68 @@ Example where re-ranking changes rank-1 (bi-encoder favored eligibility chunk; c
 See [docs/rerank-before-after.txt](docs/rerank-before-after.txt).
 
 First cross-encoder run downloads model (~100MB).
+
+## Step 6: RAGAS evaluation
+
+Batch-evaluate the RAG pipeline against a committed golden set (`backend/data/eval/golden_set.json`, 12 labeled question/`ground_truth` pairs). For each question, `run_eval` calls the full `ask_question` pipeline, scores with RAGAS (`faithfulness`, `answer_relevancy`, `context_precision`), appends JSONL logs, and prints a metrics table.
+
+Build the FAISS index from the same scheme PDF used in tests before running eval:
+
+```bash
+cd backend
+source venv/bin/activate
+python -m scripts.build_index /path/to/scheme.pdf   # once
+python -m scripts.run_eval
+python -m scripts.run_eval --golden-set data/eval/golden_set.json --index-dir data/index
+```
+
+Example output:
+
+```
+| id               | faithfulness | answer_relevancy | context_precision |
+|------------------|--------------|------------------|-------------------|
+| eligibility-01   | 0.91         | 0.87             | 0.80              |
+| MEAN             | 0.85         | 0.82             | 0.78              |
+
+Logged 12 evaluation(s) to data/logs/ragas.jsonl
+```
+
+RAGAS uses OpenRouter (same LLM as the RAG chain). Each golden-set question triggers several LLM calls for scoring.
+
+## Step 7: Frontend and source attribution UI
+
+FastAPI exposes the pipeline to a Streamlit UI. Upload a PDF in the browser, ask questions, see answers with an expandable **Sources** panel (page numbers + chunk text).
+
+### Backend API
+
+```bash
+cd backend
+source venv/bin/activate
+cp .env.example .env   # set OPENROUTER_API_KEY
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Endpoints:
+
+- `GET /api/status` — whether a document is indexed
+- `POST /api/upload` — multipart PDF upload; ingests and builds FAISS index
+- `POST /api/ask` — JSON `{ "question": "...", "k": 4 }`; returns answer + sources
+
+### Streamlit UI
+
+In a second terminal:
+
+```bash
+cd frontend
+source venv/bin/activate
+streamlit run app.py
+```
+
+Opens at `http://localhost:8501`. Optional env: `BACKEND_URL=http://127.0.0.1:8000` (default).
+
+**Reviewer checklist:** upload scheme PDF, ask an eligibility or application question, confirm answer cites the document and **Sources** expanders show page + chunk text.
+
+First upload may be slow while embedding (~90MB) and reranker (~100MB) models download.
 
 ### Tests
 

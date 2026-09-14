@@ -48,6 +48,7 @@ class RAGAnswer:
     query_type: str = "single_fact"
     sub_queries: list[str] = field(default_factory=list)
     rerank_log: list[RerankEntry] = field(default_factory=list)
+    contexts: list[str] = field(default_factory=list)
 
 
 def _format_context(scored: list[ScoredChunk]) -> str:
@@ -112,6 +113,7 @@ def create_rag_chain(
         return {
             "question": question,
             "context": _format_context(reranked),
+            "contexts": [item.chunk.text for item in reranked],
             "sources": _to_citations(reranked),
             "query_type": route.query_type,
             "sub_queries": route.sub_queries,
@@ -157,6 +159,7 @@ def create_rag_chain(
                 query_type=state["query_type"],
                 sub_queries=state["sub_queries"],
                 rerank_log=state["rerank_log"],
+                contexts=state["contexts"],
             )
         )
     )
