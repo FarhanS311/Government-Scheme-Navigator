@@ -98,7 +98,7 @@ flowchart LR
 
 **Flow summary**
 
-1. **Upload** — PDF is chunked (2500 chars, 300 overlap), embedded, and stored in a local FAISS index.
+1. **Upload** — PDF is chunked (800 chars, 120 overlap), embedded, and stored in a local FAISS index.
 2. **Ask** — Question is routed (single / multi-part / summary), relevant chunks are retrieved and reranked, then an LLM generates an answer using only retrieved context.
 3. **Sources** — Citations come from retrieved chunks (not LLM-generated); each source includes page number and chunk text.
 
@@ -190,6 +190,7 @@ Upload and index a PDF. Replaces any previously indexed document.
 | Status | Cause |
 |--------|-------|
 | 400 | Not a PDF or empty file |
+| 413 | File larger than 20 MB |
 | 422 | PDF has no extractable text |
 
 **Example (curl)**
@@ -210,7 +211,8 @@ Ask a question against the indexed document.
 ```json
 {
   "question": "Who is eligible for this scheme?",
-  "k": 4
+  "k": 4,
+  "history": []
 }
 ```
 
@@ -218,6 +220,7 @@ Ask a question against the indexed document.
 |-------|------|----------|---------|-------------|
 | `question` | string | Yes | — | User question (min 1 char) |
 | `k` | integer | No | 4 | Number of chunks sent to LLM (1–20) |
+| `history` | array | No | `[]` | Up to 6 prior chat turns (`user` / `assistant`) for follow-ups |
 
 **Response 200**
 
@@ -260,6 +263,21 @@ curl -X POST http://127.0.0.1:8000/api/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "How do I apply?", "k": 4}'
 ```
+
+---
+
+### `POST /api/ask/stream`
+
+Same body as `POST /api/ask`. Returns `text/event-stream` with:
+
+| Event | Payload |
+|-------|---------|
+| `meta` | `query_type`, `sub_queries` |
+| `token` | `{ "text": "..." }` answer deltas |
+| `sources` | Array of source objects (same shape as `/api/ask`) |
+| `done` | `{}` |
+
+The Streamlit UI uses this endpoint for streaming answers.
 
 ## Tests
 

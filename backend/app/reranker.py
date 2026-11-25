@@ -11,6 +11,7 @@ from app.vector_store import ScoredChunk
 
 RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 RERANK_TOP_N = 20
+MIN_CROSS_ENCODER_SCORE = 0.0
 DEFAULT_RERANK_LOG_PATH = Path("data/logs/rerank.jsonl")
 
 _cross_encoder: CrossEncoder | None = None
@@ -71,6 +72,13 @@ def rerank_chunks(
             reranked.append(ScoredChunk(chunk=chunk, score=float(cross_score)))
 
     return reranked, entries
+
+
+def filter_reranked_by_score(
+    scored: list[ScoredChunk],
+    min_score: float = MIN_CROSS_ENCODER_SCORE,
+) -> list[ScoredChunk]:
+    return [item for item in scored if item.score >= min_score]
 
 
 def format_rerank_comparison(question: str, entries: list[RerankEntry]) -> str:

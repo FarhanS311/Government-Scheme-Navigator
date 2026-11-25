@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.ingestion import ingest_pdf
+from app.ingestion import CHUNK_SIZE, ingest_pdf
 
 
 def _escape_pdf_text(text: str) -> str:
@@ -122,3 +122,14 @@ def test_overlap_on_long_page(tmp_path: Path) -> None:
 
     assert len(chunks) >= 2
     assert chunks[1].text[:80] in chunks[0].text
+
+
+def test_chunks_respect_max_size(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "long.pdf"
+    sentence = "The scheme provides income support to eligible landholding farmer families. "
+    _write_pdf(pdf_path, [sentence * 80])
+
+    chunks = ingest_pdf(pdf_path)
+
+    assert chunks
+    assert all(len(chunk.text) <= CHUNK_SIZE for chunk in chunks)

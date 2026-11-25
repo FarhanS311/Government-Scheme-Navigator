@@ -6,8 +6,8 @@ from pathlib import Path
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-CHUNK_SIZE = 2500
-CHUNK_OVERLAP = 300
+CHUNK_SIZE = 800
+CHUNK_OVERLAP = 120
 
 
 @dataclass(frozen=True)

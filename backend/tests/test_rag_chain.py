@@ -18,7 +18,10 @@ from app.rag_chain import (
     _retrieve_multi,
     _to_citations,
     ask_question,
+    generate_answer,
+    prepare_rag_state,
 )
+from app.schemas import ChatTurn
 from app.vector_store import ScoredChunk, build_index, load_index
 
 
@@ -253,3 +256,72 @@ def test_missing_api_key_raises() -> None:
     with patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}, clear=False):
         with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
             get_llm()
+
+
+@patch("app.rag_chain.filter_reranked_by_score", return_value=[])
+@patch("app.rag_chain.rerank_chunks", side_effect=_passthrough_rerank)
+@patch("app.rag_chain.route_query")
+def test_ask_abstains_when_rerank_scores_too_low(
+    mock_route: object,
+    mock_rerank: object,
+    mock_filter: object,
+    indexed_dir: Path,
+) -> None:
+    mock_route.return_value = RouteResult(
+        query_type="single_fact",
+        sub_queries=["Unknown topic"],
+    )
+    fake_llm = FakeListChatModel(responses=["This should not be returned."])
+    index = load_index(indexed_dir)
+    result = ask_question("Unknown topic", index, llm=fake_llm, k=2)
+
+    assert result.answer == NOT_IN_DOCUMENT_PHRASE
+    assert result.sources == []
+
+
+@patch("app.rag_chain.rewrite_follow_up", return_value="documents required to apply")
+@patch("app.rag_chain.rerank_chunks", side_effect=_passthrough_rerank)
+@patch("app.rag_chain.route_query")
+def test_history_rewrite_used_for_retrieval(
+    mock_route: object,
+    mock_rerank: object,
+    mock_rewrite: object,
+    indexed_dir: Path,
+) -> None:
+    mock_route.return_value = RouteResult(
+        query_type="single_fact",
+        sub_queries=["documents required to apply"],
+    )
+    fake_llm = FakeListChatModel(responses=["Submit identity proof with Form A."])
+    history = [
+        ChatTurn(role="user", content="Who is eligible?"),
+        ChatTurn(role="assistant", content="Resident farmers with land records."),
+    ]
+    index = load_index(indexed_dir)
+    ask_question("What documents do they need?", index, llm=fake_llm, k=2, history=history)
+
+    mock_rewrite.assert_called_once()
+    rerank_args = mock_rerank.call_args[0]
+    assert rerank_args[0] == "documents required to apply"
+
+
+@patch("app.rag_chain.filter_reranked_by_score", return_value=[])
+@patch("app.rag_chain.rerank_chunks", side_effect=_passthrough_rerank)
+@patch("app.rag_chain.route_query")
+def test_generate_answer_skips_llm_on_abstain(
+    mock_route: object,
+    mock_rerank: object,
+    mock_filter: object,
+    indexed_dir: Path,
+) -> None:
+    mock_route.return_value = RouteResult(
+        query_type="single_fact",
+        sub_queries=["Unknown"],
+    )
+    fake_llm = FakeListChatModel(responses=["should not run"])
+    index = load_index(indexed_dir)
+    prepared = prepare_rag_state("Unknown", index, fake_llm, k=2)
+
+    assert prepared.abstain
+    answer = generate_answer(prepared, fake_llm)
+    assert answer == NOT_IN_DOCUMENT_PHRASE

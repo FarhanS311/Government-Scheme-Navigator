@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -9,7 +10,13 @@ from langchain_core.runnables import Runnable, RunnableLambda, RunnablePassthrou
 
 from app.config import get_llm
 from app.query_router import route_query
-from app.reranker import RERANK_TOP_N, RerankEntry, rerank_chunks
+from app.reranker import (
+    RERANK_TOP_N,
+    RerankEntry,
+    filter_reranked_by_score,
+    rerank_chunks,
+)
+from app.schemas import ChatTurn
 from app.vector_store import ScoredChunk, VectorIndex
 
 NOT_IN_DOCUMENT_PHRASE = "The answer is not in this document."
@@ -28,10 +35,21 @@ Rules:
 
 HUMAN_PROMPT = """Context:
 {context}
-
+{conversation_block}
 Question: {question}
 
 Answer:"""
+
+REWRITE_PROMPT = """Given the conversation and the user's latest follow-up question, write ONE standalone search query that captures what the user wants to know from a government scheme PDF.
+
+Output only the query text, with no quotes or explanation.
+
+Conversation:
+{history}
+
+Latest question: {question}
+
+Standalone search query:"""
 
 
 @dataclass(frozen=True)
@@ -49,6 +67,21 @@ class RAGAnswer:
     sub_queries: list[str] = field(default_factory=list)
     rerank_log: list[RerankEntry] = field(default_factory=list)
     contexts: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PreparedRAG:
+    question: str
+    search_question: str
+    history: list[ChatTurn]
+    query_type: str
+    sub_queries: list[str]
+    reranked: list[ScoredChunk]
+    rerank_log: list[RerankEntry]
+    abstain: bool
+    context: str
+    contexts: list[str]
+    sources: list[SourceCitation]
 
 
 def _format_context(scored: list[ScoredChunk]) -> str:
@@ -100,69 +133,163 @@ def _summary_hint(query_type: str) -> str:
     return ""
 
 
+def _format_history(history: list[ChatTurn]) -> str:
+    lines: list[str] = []
+    for turn in history:
+        speaker = "User" if turn.role == "user" else "Assistant"
+        lines.append(f"{speaker}: {turn.content}")
+    return "\n".join(lines)
+
+
+def _conversation_block(history: list[ChatTurn]) -> str:
+    if not history:
+        return ""
+    return f"\nPrior conversation:\n{_format_history(history)}\n"
+
+
+def rewrite_follow_up(
+    question: str,
+    history: list[ChatTurn],
+    llm: BaseChatModel,
+) -> str:
+    if not history:
+        return question
+
+    prompt = ChatPromptTemplate.from_template(REWRITE_PROMPT)
+    chain = prompt | llm | StrOutputParser()
+    try:
+        rewritten = chain.invoke(
+            {"history": _format_history(history), "question": question}
+        )
+        cleaned = rewritten.strip()
+        return cleaned or question
+    except Exception:
+        return question
+
+
+def build_answer_chain(query_type: str, llm: BaseChatModel) -> Runnable:
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                SYSTEM_PROMPT.format(
+                    not_in_document_phrase=NOT_IN_DOCUMENT_PHRASE,
+                    summary_hint=_summary_hint(query_type),
+                ),
+            ),
+            ("human", HUMAN_PROMPT),
+        ]
+    )
+    return (
+        RunnableLambda(
+            lambda state: {
+                "question": state["question"],
+                "context": state["context"],
+                "conversation_block": state["conversation_block"],
+            }
+        )
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+
+
+def prepare_rag_state(
+    question: str,
+    vector_index: VectorIndex,
+    llm: BaseChatModel,
+    k: int = DEFAULT_RETRIEVAL_K,
+    history: list[ChatTurn] | None = None,
+) -> PreparedRAG:
+    prior = history or []
+    search_question = rewrite_follow_up(question.strip(), prior, llm)
+    route = route_query(search_question, llm)
+    scored = _retrieve_multi(vector_index, route.sub_queries, k=RERANK_TOP_N)
+    reranked, rerank_log = rerank_chunks(search_question, scored, top_k=k)
+    reranked = filter_reranked_by_score(reranked)
+
+    if not reranked:
+        return PreparedRAG(
+            question=question.strip(),
+            search_question=search_question,
+            history=prior,
+            query_type=route.query_type,
+            sub_queries=route.sub_queries,
+            reranked=[],
+            rerank_log=rerank_log,
+            abstain=True,
+            context="",
+            contexts=[],
+            sources=[],
+        )
+
+    return PreparedRAG(
+        question=question.strip(),
+        search_question=search_question,
+        history=prior,
+        query_type=route.query_type,
+        sub_queries=route.sub_queries,
+        reranked=reranked,
+        rerank_log=rerank_log,
+        abstain=False,
+        context=_format_context(reranked),
+        contexts=[item.chunk.text for item in reranked],
+        sources=_to_citations(reranked),
+    )
+
+
+def _answer_invoke_state(prepared: PreparedRAG) -> dict[str, str]:
+    return {
+        "question": prepared.question,
+        "context": prepared.context,
+        "conversation_block": _conversation_block(prepared.history),
+    }
+
+
+def generate_answer(prepared: PreparedRAG, llm: BaseChatModel) -> str:
+    if prepared.abstain:
+        return NOT_IN_DOCUMENT_PHRASE
+    chain = build_answer_chain(prepared.query_type, llm)
+    return chain.invoke(_answer_invoke_state(prepared))
+
+
+async def stream_answer_tokens(
+    prepared: PreparedRAG,
+    llm: BaseChatModel,
+) -> AsyncIterator[str]:
+    if prepared.abstain:
+        yield NOT_IN_DOCUMENT_PHRASE
+        return
+
+    chain = build_answer_chain(prepared.query_type, llm)
+    async for token in chain.astream(_answer_invoke_state(prepared)):
+        if token:
+            yield token
+
+
+def prepared_to_rag_answer(prepared: PreparedRAG, answer: str) -> RAGAnswer:
+    return RAGAnswer(
+        answer=answer,
+        sources=prepared.sources,
+        query_type=prepared.query_type,
+        sub_queries=prepared.sub_queries,
+        rerank_log=prepared.rerank_log,
+        contexts=prepared.contexts,
+    )
+
+
 def create_rag_chain(
     vector_index: VectorIndex,
     llm: BaseChatModel,
     k: int = DEFAULT_RETRIEVAL_K,
 ) -> Runnable:
-    def retrieve_step(inputs: dict[str, str]) -> dict[str, object]:
+    def run(inputs: dict[str, str]) -> RAGAnswer:
         question = inputs["question"]
-        route = route_query(question, llm)
-        scored = _retrieve_multi(vector_index, route.sub_queries, k=RERANK_TOP_N)
-        reranked, rerank_log = rerank_chunks(question, scored, top_k=k)
-        return {
-            "question": question,
-            "context": _format_context(reranked),
-            "contexts": [item.chunk.text for item in reranked],
-            "sources": _to_citations(reranked),
-            "query_type": route.query_type,
-            "sub_queries": route.sub_queries,
-            "rerank_log": rerank_log,
-        }
+        prepared = prepare_rag_state(question, vector_index, llm, k=k)
+        answer = generate_answer(prepared, llm)
+        return prepared_to_rag_answer(prepared, answer)
 
-    def build_answer_chain(query_type: str) -> Runnable:
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    SYSTEM_PROMPT.format(
-                        not_in_document_phrase=NOT_IN_DOCUMENT_PHRASE,
-                        summary_hint=_summary_hint(query_type),
-                    ),
-                ),
-                ("human", HUMAN_PROMPT),
-            ]
-        )
-        return (
-            RunnableLambda(
-                lambda state: {
-                    "question": state["question"],
-                    "context": state["context"],
-                }
-            )
-            | prompt
-            | llm
-            | StrOutputParser()
-        )
-
-    def answer_step(state: dict[str, object]) -> str:
-        chain = build_answer_chain(str(state["query_type"]))
-        return chain.invoke(state)
-
-    return (
-        RunnableLambda(retrieve_step)
-        | RunnablePassthrough.assign(answer_text=RunnableLambda(answer_step))
-        | RunnableLambda(
-            lambda state: RAGAnswer(
-                answer=state["answer_text"],
-                sources=state["sources"],
-                query_type=state["query_type"],
-                sub_queries=state["sub_queries"],
-                rerank_log=state["rerank_log"],
-                contexts=state["contexts"],
-            )
-        )
-    )
+    return RunnableLambda(run)
 
 
 def ask_question(
@@ -170,6 +297,20 @@ def ask_question(
     vector_index: VectorIndex,
     llm: BaseChatModel | None = None,
     k: int = DEFAULT_RETRIEVAL_K,
+    history: list[ChatTurn] | None = None,
 ) -> RAGAnswer:
-    chain = create_rag_chain(vector_index, llm or get_llm(), k=k)
-    return chain.invoke({"question": question})
+    model = llm or get_llm()
+    prepared = prepare_rag_state(question, vector_index, model, k=k, history=history)
+    answer = generate_answer(prepared, model)
+    return prepared_to_rag_answer(prepared, answer)
+
+
+def iter_answer_tokens(
+    prepared: PreparedRAG,
+    llm: BaseChatModel,
+) -> Iterator[str]:
+    if prepared.abstain:
+        yield NOT_IN_DOCUMENT_PHRASE
+        return
+    chain = build_answer_chain(prepared.query_type, llm)
+    yield from chain.stream(_answer_invoke_state(prepared))

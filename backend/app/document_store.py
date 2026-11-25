@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,8 +11,10 @@ from app.vector_store import DEFAULT_INDEX_DIR, VectorIndex, build_index, load_i
 
 UPLOAD_DIR = Path("data/uploads")
 META_FILENAME = "document_meta.json"
+STORED_PDF_FILENAME = "document.pdf"
 
 _index_cache: VectorIndex | None = None
+_upload_lock = threading.Lock()
 
 
 def _resolve_index_dir(index_dir: Path | None) -> Path:
@@ -43,6 +46,17 @@ def _write_meta(filename: str, chunk_count: int, index_dir: Path) -> None:
         json.dumps(payload, ensure_ascii=True),
         encoding="utf-8",
     )
+
+
+def sanitize_display_filename(filename: str) -> str:
+    name = Path(filename).name
+    if not name or name in {".", ".."}:
+        raise ValueError("invalid filename")
+    if not name.lower().endswith(".pdf"):
+        raise ValueError("only PDF files are supported")
+    if "/" in name or "\\" in name:
+        raise ValueError("invalid filename")
+    return name
 
 
 def get_status(index_dir: Path | None = None) -> dict[str, object]:
@@ -81,28 +95,27 @@ def ingest_upload(
 ) -> dict[str, object]:
     global _index_cache
 
+    display_name = sanitize_display_filename(filename)
     resolved_index_dir = _resolve_index_dir(index_dir)
     resolved_upload_dir = _resolve_upload_dir(upload_dir)
 
-    if not filename.lower().endswith(".pdf"):
-        raise ValueError("only PDF files are supported")
+    with _upload_lock:
+        resolved_upload_dir.mkdir(parents=True, exist_ok=True)
+        clear_index(resolved_index_dir)
 
-    resolved_upload_dir.mkdir(parents=True, exist_ok=True)
-    clear_index(resolved_index_dir)
+        pdf_path = resolved_upload_dir / STORED_PDF_FILENAME
+        pdf_path.write_bytes(file_bytes)
 
-    pdf_path = resolved_upload_dir / filename
-    pdf_path.write_bytes(file_bytes)
+        chunks = ingest_pdf(pdf_path)
+        if not chunks:
+            raise ValueError("PDF produced no text chunks")
 
-    chunks = ingest_pdf(pdf_path)
-    if not chunks:
-        raise ValueError("PDF produced no text chunks")
+        build_index(chunks, resolved_index_dir)
+        _write_meta(display_name, len(chunks), resolved_index_dir)
+        _index_cache = load_index(resolved_index_dir)
 
-    build_index(chunks, resolved_index_dir)
-    _write_meta(filename, len(chunks), resolved_index_dir)
-    _index_cache = load_index(resolved_index_dir)
-
-    return {
-        "filename": filename,
-        "chunk_count": len(chunks),
-        "message": f"Indexed {len(chunks)} chunk(s) from {filename}",
-    }
+        return {
+            "filename": display_name,
+            "chunk_count": len(chunks),
+            "message": f"Indexed {len(chunks)} chunk(s) from {display_name}",
+        }

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from collections.abc import Generator, Iterator
 from typing import Any
 
 import httpx
@@ -29,14 +31,57 @@ def upload_pdf(client: httpx.Client, file_name: str, file_bytes: bytes) -> dict[
     return response.json()
 
 
-def ask_question(client: httpx.Client, question: str, k: int = 4) -> dict[str, Any]:
-    response = client.post(
-        f"{backend_url()}/api/ask",
-        json={"question": question, "k": k},
+def iter_ask_stream_events(
+    client: httpx.Client,
+    question: str,
+    history: list[dict[str, str]],
+    k: int = 4,
+) -> Iterator[tuple[str, Any]]:
+    with client.stream(
+        "POST",
+        f"{backend_url()}/api/ask/stream",
+        json={"question": question, "k": k, "history": history},
         timeout=120.0,
-    )
-    response.raise_for_status()
-    return response.json()
+    ) as response:
+        response.raise_for_status()
+        buffer = ""
+        for chunk in response.iter_text():
+            buffer += chunk
+            while "\n\n" in buffer:
+                block, buffer = buffer.split("\n\n", 1)
+                event_type = "message"
+                data_line = ""
+                for line in block.split("\n"):
+                    if line.startswith("event:"):
+                        event_type = line[6:].strip()
+                    elif line.startswith("data:"):
+                        data_line = line[5:].strip()
+                if not data_line:
+                    continue
+                payload = json.loads(data_line)
+                yield event_type, payload
+
+
+def stream_answer_tokens(
+    client: httpx.Client,
+    question: str,
+    history: list[dict[str, str]],
+    k: int = 4,
+) -> tuple[Generator[str, None, None], dict[str, Any]]:
+    stream_meta: dict[str, Any] = {}
+
+    def token_generator() -> Generator[str, None, None]:
+        for event_type, payload in iter_ask_stream_events(client, question, history, k=k):
+            if event_type == "meta":
+                stream_meta.update(payload)
+            elif event_type == "token":
+                text = payload.get("text", "")
+                if text:
+                    yield text
+            elif event_type == "sources":
+                stream_meta["sources"] = payload
+
+    return token_generator(), stream_meta
 
 
 def main() -> None:
@@ -108,9 +153,15 @@ def main() -> None:
 
         if question:
             st.session_state.messages.append({"role": "user", "content": question})
-            with st.spinner("Searching document and generating answer..."):
+            history = [
+                {"role": message["role"], "content": message["content"]}
+                for message in st.session_state.messages[:-1]
+            ]
+            token_gen, stream_meta = stream_answer_tokens(client, question, history)
+
+            with st.chat_message("assistant"):
                 try:
-                    result = ask_question(client, question)
+                    answer = st.write_stream(token_gen)
                 except httpx.HTTPStatusError as exc:
                     st.error(f"Question failed: {exc.response.text}")
                     st.stop()
@@ -118,12 +169,22 @@ def main() -> None:
                     st.error(f"Question failed: {exc}")
                     st.stop()
 
+                sources = stream_meta.get("sources", [])
+                if sources:
+                    with st.expander(f"Sources ({len(sources)})", expanded=False):
+                        for source in sources:
+                            label = f"Page {source['page']} · Chunk {source['id']}"
+                            with st.expander(label, expanded=False):
+                                st.markdown(source.get("text") or source.get("snippet", ""))
+                if stream_meta.get("query_type"):
+                    st.caption(f"Query type: {stream_meta['query_type']}")
+
             st.session_state.messages.append(
                 {
                     "role": "assistant",
-                    "content": result["answer"],
-                    "sources": result.get("sources", []),
-                    "query_type": result.get("query_type"),
+                    "content": answer,
+                    "sources": stream_meta.get("sources", []),
+                    "query_type": stream_meta.get("query_type"),
                 }
             )
             st.rerun()

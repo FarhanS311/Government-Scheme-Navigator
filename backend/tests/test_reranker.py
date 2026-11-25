@@ -5,6 +5,7 @@ import pytest
 
 from app.ingestion import Chunk
 from app.reranker import (
+    filter_reranked_by_score,
     format_rerank_comparison,
     log_rerank_to_jsonl,
     rerank_chunks,
@@ -51,6 +52,15 @@ class FakeCrossEncoder:
             else:
                 scores.append(1.0)
         return scores
+
+
+def test_filter_reranked_by_score_drops_below_threshold() -> None:
+    scored = _scored_corpus()
+    kept = filter_reranked_by_score(scored, min_score=0.0)
+    dropped = filter_reranked_by_score(scored, min_score=0.5)
+
+    assert len(kept) == 2
+    assert dropped == []
 
 
 def test_rerank_chunks_assigns_ranks() -> None:
