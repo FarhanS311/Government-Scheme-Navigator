@@ -1,3 +1,5 @@
+"""CLI: run raw FAISS similarity search without LLM answer generation."""
+
 from __future__ import annotations
 
 import argparse
@@ -7,6 +9,7 @@ from app.vector_store import DEFAULT_INDEX_DIR, load_index
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Load an index and print top-k bi-encoder hits for one question."""
     parser = argparse.ArgumentParser(
         description="Query a persisted FAISS index and print top-k chunks."
     )

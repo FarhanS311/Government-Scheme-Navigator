@@ -1,3 +1,5 @@
+"""FAISS vector index build, persistence, and similarity search over scheme chunks."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,11 +21,14 @@ _embeddings: HuggingFaceEmbeddings | None = None
 
 @dataclass(frozen=True)
 class ScoredChunk:
+    """A ``Chunk`` paired with its retrieval similarity score."""
+
     chunk: Chunk
     score: float
 
 
 def _get_embeddings() -> HuggingFaceEmbeddings:
+    """Lazy-load and cache the sentence-transformer embedding model."""
     global _embeddings
     if _embeddings is None:
         _embeddings = HuggingFaceEmbeddings(
@@ -34,6 +39,7 @@ def _get_embeddings() -> HuggingFaceEmbeddings:
 
 
 def chunks_to_documents(chunks: list[Chunk]) -> list[Document]:
+    """Convert internal chunks into LangChain documents for FAISS indexing."""
     return [
         Document(
             page_content=chunk.text,
@@ -48,6 +54,7 @@ def chunks_to_documents(chunks: list[Chunk]) -> list[Document]:
 
 
 def _document_to_chunk(document: Document) -> Chunk:
+    """Rebuild a ``Chunk`` from a FAISS-stored LangChain document."""
     metadata = document.metadata
     return Chunk(
         text=document.page_content,
@@ -58,16 +65,21 @@ def _document_to_chunk(document: Document) -> Chunk:
 
 
 def _index_files_exist(persist_dir: Path) -> bool:
+    """Return True when both FAISS artifact files are present on disk."""
     return (persist_dir / f"{INDEX_NAME}.faiss").exists() and (
         persist_dir / f"{INDEX_NAME}.pkl"
     ).exists()
 
 
 class VectorIndex:
+    """Thin wrapper around a loaded FAISS store for top-k similarity search."""
+
     def __init__(self, store: FAISS) -> None:
+        """Store the underlying LangChain FAISS instance."""
         self._store = store
 
     def query_index(self, question: str, k: int = 4) -> list[ScoredChunk]:
+        """Run inner-product similarity search and return chunks sorted by score."""
         if k < 1:
             raise ValueError("k must be at least 1")
 
@@ -81,6 +93,7 @@ class VectorIndex:
 
 
 def build_index(chunks: list[Chunk], persist_dir: Path = DEFAULT_INDEX_DIR) -> None:
+    """Embed chunks and write a new FAISS index to ``persist_dir``."""
     if not chunks:
         raise ValueError("cannot build index from empty chunk list")
 
@@ -95,6 +108,7 @@ def build_index(chunks: list[Chunk], persist_dir: Path = DEFAULT_INDEX_DIR) -> N
 
 
 def load_index(persist_dir: Path = DEFAULT_INDEX_DIR) -> VectorIndex:
+    """Load a persisted FAISS index from disk."""
     if not persist_dir.exists():
         raise FileNotFoundError(f"index directory not found: {persist_dir}")
     if not _index_files_exist(persist_dir):

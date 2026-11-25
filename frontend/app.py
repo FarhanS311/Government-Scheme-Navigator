@@ -1,3 +1,5 @@
+"""Streamlit chat UI for uploading a scheme PDF and asking cited questions."""
+
 from __future__ import annotations
 
 import json
@@ -12,16 +14,19 @@ DEFAULT_BACKEND_URL = "http://127.0.0.1:8000"
 
 
 def backend_url() -> str:
+    """Resolve the FastAPI base URL from ``BACKEND_URL`` or the default."""
     return os.getenv("BACKEND_URL", DEFAULT_BACKEND_URL).rstrip("/")
 
 
 def fetch_status(client: httpx.Client) -> dict[str, Any]:
+    """GET ``/api/status`` and return parsed JSON."""
     response = client.get(f"{backend_url()}/api/status")
     response.raise_for_status()
     return response.json()
 
 
 def upload_pdf(client: httpx.Client, file_name: str, file_bytes: bytes) -> dict[str, Any]:
+    """POST a PDF multipart upload to the indexing endpoint."""
     response = client.post(
         f"{backend_url()}/api/upload",
         files={"file": (file_name, file_bytes, "application/pdf")},
@@ -37,6 +42,7 @@ def iter_ask_stream_events(
     history: list[dict[str, str]],
     k: int = 4,
 ) -> Iterator[tuple[str, Any]]:
+    """Parse SSE blocks from ``/api/ask/stream`` into ``(event, payload)`` tuples."""
     with client.stream(
         "POST",
         f"{backend_url()}/api/ask/stream",
@@ -68,6 +74,7 @@ def stream_answer_tokens(
     history: list[dict[str, str]],
     k: int = 4,
 ) -> tuple[Generator[str, None, None], dict[str, Any]]:
+    """Return a token generator for ``st.write_stream`` and a mutable meta dict."""
     stream_meta: dict[str, Any] = {}
 
     def token_generator() -> Generator[str, None, None]:
@@ -85,6 +92,7 @@ def stream_answer_tokens(
 
 
 def main() -> None:
+    """Render upload, chat history, streaming answers, and source expanders."""
     st.set_page_config(page_title="Government Scheme Navigator", layout="wide")
     st.title("Government Scheme Navigator")
     st.caption("Upload one scheme PDF, ask questions, get cited answers from that document.")

@@ -1,3 +1,5 @@
+"""CLI: batch RAGAS evaluation over ``data/eval/golden_set.json``."""
+
 from __future__ import annotations
 
 import argparse
@@ -7,6 +9,7 @@ from app.config import get_llm
 from app.evaluation import (
     DEFAULT_EVAL_LOG_PATH,
     DEFAULT_GOLDEN_SET_PATH,
+    EvalRecord,
     build_eval_record,
     evaluate_single,
     format_metrics_table,
@@ -22,11 +25,12 @@ def run_eval(
     index_dir: Path = DEFAULT_INDEX_DIR,
     log_path: Path = DEFAULT_EVAL_LOG_PATH,
     k: int = 4,
-) -> list:
+) -> list[EvalRecord]:
+    """Run RAG + RAGAS for each golden item and append results to JSONL."""
     golden_items = load_golden_set(golden_set_path)
     index = load_index(index_dir)
     llm = get_llm()
-    records = []
+    records: list[EvalRecord] = []
 
     for item in golden_items:
         result = ask_question(item["question"], index, llm=llm, k=k)
@@ -51,6 +55,7 @@ def run_eval(
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Parse CLI flags, run the golden set, and print a metrics summary table."""
     parser = argparse.ArgumentParser(description="Run batch RAGAS evaluation on the golden set.")
     parser.add_argument(
         "--golden-set",

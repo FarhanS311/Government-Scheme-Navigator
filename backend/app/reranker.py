@@ -1,3 +1,5 @@
+"""Cross-encoder re-ranking of bi-encoder retrieval hits with optional JSONL logging."""
+
 from __future__ import annotations
 
 import json
@@ -19,6 +21,8 @@ _cross_encoder: CrossEncoder | None = None
 
 @dataclass(frozen=True)
 class RerankEntry:
+    """Before/after ranks and scores for one chunk in a re-ranking pass."""
+
     chunk_index: int
     page: int
     bi_encoder_score: float
@@ -28,6 +32,7 @@ class RerankEntry:
 
 
 def _get_cross_encoder() -> CrossEncoder:
+    """Lazy-load and cache the MS MARCO cross-encoder model."""
     global _cross_encoder
     if _cross_encoder is None:
         _cross_encoder = CrossEncoder(RERANK_MODEL)
@@ -40,6 +45,7 @@ def rerank_chunks(
     top_k: int = 4,
     cross_encoder: CrossEncoder | None = None,
 ) -> tuple[list[ScoredChunk], list[RerankEntry]]:
+    """Re-score chunks with a cross-encoder and return the top ``top_k`` hits."""
     if not scored:
         return [], []
 
@@ -78,10 +84,12 @@ def filter_reranked_by_score(
     scored: list[ScoredChunk],
     min_score: float = MIN_CROSS_ENCODER_SCORE,
 ) -> list[ScoredChunk]:
+    """Drop chunks whose cross-encoder score is below ``min_score``."""
     return [item for item in scored if item.score >= min_score]
 
 
 def format_rerank_comparison(question: str, entries: list[RerankEntry]) -> str:
+    """Render a human-readable before/after table for CLI debugging."""
     before_lines = sorted(entries, key=lambda entry: entry.rank_before)
     after_lines = sorted(entries, key=lambda entry: entry.rank_after)
 
@@ -105,6 +113,7 @@ def log_rerank_to_jsonl(
     entries: list[RerankEntry],
     path: Path = DEFAULT_RERANK_LOG_PATH,
 ) -> None:
+    """Append one re-ranking record to a JSONL debug log."""
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "timestamp": datetime.now(timezone.utc).isoformat(),

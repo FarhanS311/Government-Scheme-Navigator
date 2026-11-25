@@ -1,3 +1,5 @@
+"""Load environment variables and construct the OpenRouter-backed chat model."""
+
 from __future__ import annotations
 
 import os
@@ -13,6 +15,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
 def get_llm() -> ChatOpenAI:
+    """Return a temperature-zero ChatOpenAI client configured for OpenRouter."""
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         raise ValueError("OPENROUTER_API_KEY is not set; copy .env.example to .env")

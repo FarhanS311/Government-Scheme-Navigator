@@ -1,3 +1,5 @@
+"""LCEL RAG orchestration: routing, retrieval, re-ranking, abstention, and answer generation."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
@@ -6,7 +8,7 @@ from dataclasses import dataclass, field
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import Runnable, RunnableLambda, RunnablePassthrough
+from langchain_core.runnables import Runnable, RunnableLambda
 
 from app.config import get_llm
 from app.query_router import route_query
@@ -54,6 +56,8 @@ Standalone search query:"""
 
 @dataclass(frozen=True)
 class SourceCitation:
+    """Lightweight citation fields attached to each answer."""
+
     id: int
     page: int
     snippet: str
@@ -61,6 +65,8 @@ class SourceCitation:
 
 @dataclass(frozen=True)
 class RAGAnswer:
+    """End-to-end RAG output returned by ``ask_question`` and the JSON API."""
+
     answer: str
     sources: list[SourceCitation]
     query_type: str = "single_fact"
@@ -71,6 +77,8 @@ class RAGAnswer:
 
 @dataclass(frozen=True)
 class PreparedRAG:
+    """Retrieval state shared by sync answers and streaming token generation."""
+
     question: str
     search_question: str
     history: list[ChatTurn]
@@ -85,6 +93,7 @@ class PreparedRAG:
 
 
 def _format_context(scored: list[ScoredChunk]) -> str:
+    """Join retrieved chunks into one prompt block with page/chunk labels."""
     blocks: list[str] = []
     for item in scored:
         chunk = item.chunk
@@ -97,6 +106,7 @@ def _format_context(scored: list[ScoredChunk]) -> str:
 def _to_citations(
     scored: list[ScoredChunk], snippet_len: int = SNIPPET_LENGTH
 ) -> list[SourceCitation]:
+    """Build API-facing citations from scored chunks."""
     return [
         SourceCitation(
             id=item.chunk.chunk_index,
@@ -108,6 +118,7 @@ def _to_citations(
 
 
 def _merge_scored_chunks(chunks: list[ScoredChunk], k: int) -> list[ScoredChunk]:
+    """Deduplicate multi-query hits by chunk index and keep the top ``k`` scores."""
     best_by_index: dict[int, ScoredChunk] = {}
     for item in chunks:
         chunk_index = item.chunk.chunk_index
@@ -121,6 +132,7 @@ def _merge_scored_chunks(chunks: list[ScoredChunk], k: int) -> list[ScoredChunk]
 def _retrieve_multi(
     vector_index: VectorIndex, sub_queries: list[str], k: int
 ) -> list[ScoredChunk]:
+    """Run FAISS search for each sub-query and merge results."""
     all_scored: list[ScoredChunk] = []
     for sub_query in sub_queries:
         all_scored.extend(vector_index.query_index(sub_query, k=k))
@@ -128,12 +140,14 @@ def _retrieve_multi(
 
 
 def _summary_hint(query_type: str) -> str:
+    """Add an extra system prompt line for summarization questions."""
     if query_type == "summarization":
         return "\n- The user wants a concise summary drawn only from the context."
     return ""
 
 
 def _format_history(history: list[ChatTurn]) -> str:
+    """Render chat turns as plain text for rewrite and answer prompts."""
     lines: list[str] = []
     for turn in history:
         speaker = "User" if turn.role == "user" else "Assistant"
@@ -142,6 +156,7 @@ def _format_history(history: list[ChatTurn]) -> str:
 
 
 def _conversation_block(history: list[ChatTurn]) -> str:
+    """Wrap formatted history for insertion into the human answer prompt."""
     if not history:
         return ""
     return f"\nPrior conversation:\n{_format_history(history)}\n"
@@ -152,6 +167,7 @@ def rewrite_follow_up(
     history: list[ChatTurn],
     llm: BaseChatModel,
 ) -> str:
+    """Turn a contextual follow-up into a standalone retrieval query."""
     if not history:
         return question
 
@@ -168,6 +184,7 @@ def rewrite_follow_up(
 
 
 def build_answer_chain(query_type: str, llm: BaseChatModel) -> Runnable:
+    """Construct the grounded-answer LangChain runnable for a query type."""
     prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -201,6 +218,7 @@ def prepare_rag_state(
     k: int = DEFAULT_RETRIEVAL_K,
     history: list[ChatTurn] | None = None,
 ) -> PreparedRAG:
+    """Route, retrieve, re-rank, and optionally mark the query as abstain."""
     prior = history or []
     search_question = rewrite_follow_up(question.strip(), prior, llm)
     route = route_query(search_question, llm)
@@ -239,6 +257,7 @@ def prepare_rag_state(
 
 
 def _answer_invoke_state(prepared: PreparedRAG) -> dict[str, str]:
+    """Build the dict passed into the answer LangChain runnable."""
     return {
         "question": prepared.question,
         "context": prepared.context,
@@ -247,6 +266,7 @@ def _answer_invoke_state(prepared: PreparedRAG) -> dict[str, str]:
 
 
 def generate_answer(prepared: PreparedRAG, llm: BaseChatModel) -> str:
+    """Return the abstain phrase or invoke the LLM for a full answer."""
     if prepared.abstain:
         return NOT_IN_DOCUMENT_PHRASE
     chain = build_answer_chain(prepared.query_type, llm)
@@ -257,6 +277,7 @@ async def stream_answer_tokens(
     prepared: PreparedRAG,
     llm: BaseChatModel,
 ) -> AsyncIterator[str]:
+    """Async-token stream for SSE, including instant abstain responses."""
     if prepared.abstain:
         yield NOT_IN_DOCUMENT_PHRASE
         return
@@ -268,6 +289,7 @@ async def stream_answer_tokens(
 
 
 def prepared_to_rag_answer(prepared: PreparedRAG, answer: str) -> RAGAnswer:
+    """Attach a final answer string to prepared retrieval metadata."""
     return RAGAnswer(
         answer=answer,
         sources=prepared.sources,
@@ -283,6 +305,7 @@ def create_rag_chain(
     llm: BaseChatModel,
     k: int = DEFAULT_RETRIEVAL_K,
 ) -> Runnable:
+    """Return a LangChain runnable that runs prepare + generate for one question."""
     def run(inputs: dict[str, str]) -> RAGAnswer:
         question = inputs["question"]
         prepared = prepare_rag_state(question, vector_index, llm, k=k)
@@ -299,6 +322,7 @@ def ask_question(
     k: int = DEFAULT_RETRIEVAL_K,
     history: list[ChatTurn] | None = None,
 ) -> RAGAnswer:
+    """Main entry point used by the API, CLIs, and RAGAS evaluation."""
     model = llm or get_llm()
     prepared = prepare_rag_state(question, vector_index, model, k=k, history=history)
     answer = generate_answer(prepared, model)
@@ -309,6 +333,7 @@ def iter_answer_tokens(
     prepared: PreparedRAG,
     llm: BaseChatModel,
 ) -> Iterator[str]:
+    """Synchronous token iterator used in tests and fallback streaming paths."""
     if prepared.abstain:
         yield NOT_IN_DOCUMENT_PHRASE
         return

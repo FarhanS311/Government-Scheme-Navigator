@@ -1,3 +1,5 @@
+"""CLI: run the full RAG chain and print answer, sources, and rerank debug output."""
+
 from __future__ import annotations
 
 import argparse
@@ -10,6 +12,7 @@ from app.vector_store import DEFAULT_INDEX_DIR, load_index
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Ask one question against a persisted index from the command line."""
     parser = argparse.ArgumentParser(
         description="Ask a question using the LCEL RAG chain over the persisted index."
     )

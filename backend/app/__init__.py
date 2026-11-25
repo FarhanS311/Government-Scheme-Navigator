@@ -1,0 +1,1 @@
+"""Government Scheme Navigator backend application package."""

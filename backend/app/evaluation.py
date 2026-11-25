@@ -1,3 +1,5 @@
+"""RAGAS metric evaluation against a golden question set with JSONL logging."""
+
 from __future__ import annotations
 
 import json
@@ -26,6 +28,8 @@ METRIC_NAMES = ("faithfulness", "answer_relevancy", "context_precision")
 
 @dataclass(frozen=True)
 class EvalRecord:
+    """One scored row from a batch golden-set evaluation run."""
+
     eval_id: str
     timestamp: str
     question: str
@@ -37,6 +41,7 @@ class EvalRecord:
 
 
 def load_golden_set(path: Path = DEFAULT_GOLDEN_SET_PATH) -> list[dict[str, str]]:
+    """Load and validate golden evaluation items from JSON."""
     items = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(items, list):
         raise ValueError("golden set must be a JSON array")
@@ -56,6 +61,7 @@ def evaluate_single(
     ground_truth: str,
     llm: BaseChatModel,
 ) -> dict[str, float]:
+    """Score one Q&A pair with RAGAS faithfulness, relevancy, and precision."""
     wrapped_llm = LangchainLLMWrapper(llm)
     embeddings = LangchainEmbeddingsWrapper(
         HuggingFaceEmbeddings(
@@ -91,6 +97,7 @@ def evaluate_single(
 
 
 def log_eval_record(record: EvalRecord, path: Path = DEFAULT_EVAL_LOG_PATH) -> None:
+    """Append one evaluation record as a JSON line."""
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "timestamp": record.timestamp,
@@ -114,6 +121,7 @@ def build_eval_record(
     ground_truth: str,
     metrics: dict[str, float],
 ) -> EvalRecord:
+    """Create a timestamped ``EvalRecord`` from RAGAS metric scores."""
     return EvalRecord(
         eval_id=eval_id,
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -127,12 +135,14 @@ def build_eval_record(
 
 
 def _format_score(value: float | None) -> str:
+    """Format a metric for markdown table output."""
     if value is None:
         return "n/a"
     return f"{value:.2f}"
 
 
 def format_metrics_table(records: list[EvalRecord]) -> str:
+    """Render per-row metrics plus column means as a markdown table string."""
     header = (
         f"| {'id':<16} | {'faithfulness':<12} | "
         f"{'answer_relevancy':<16} | {'context_precision':<17} |"

@@ -1,3 +1,5 @@
+"""CLI: load a PDF and print chunks with page metadata for debugging ingestion."""
+
 from __future__ import annotations
 
 import argparse
@@ -7,6 +9,7 @@ from app.ingestion import ingest_pdf
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Parse args, ingest the PDF, and print each chunk to stdout."""
     parser = argparse.ArgumentParser(description="Load a PDF and print text chunks with page metadata.")
     parser.add_argument("pdf_path", type=Path, help="Path to a PDF file")
     args = parser.parse_args(argv)

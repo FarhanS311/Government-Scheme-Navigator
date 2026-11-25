@@ -1,3 +1,5 @@
+"""CLI: ingest a PDF and persist a FAISS index under ``data/index``."""
+
 from __future__ import annotations
 
 import argparse
@@ -8,6 +10,7 @@ from app.vector_store import DEFAULT_INDEX_DIR, build_index
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Chunk a PDF and write embedding vectors to disk."""
     parser = argparse.ArgumentParser(
         description="Ingest a PDF and build a persisted FAISS index."
     )

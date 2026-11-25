@@ -1,0 +1,1 @@
+"""Optional CLI scripts for local RAG pipeline debugging."""

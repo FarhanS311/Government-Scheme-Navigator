@@ -1,3 +1,5 @@
+"""LLM-based classification of questions into retrieval strategies and sub-queries."""
+
 from __future__ import annotations
 
 from typing import Literal
@@ -23,11 +25,14 @@ Question: {question}"""
 
 
 class RouteResult(BaseModel):
+    """Structured router output consumed by the RAG retrieval step."""
+
     query_type: Literal["single_fact", "multi_part", "summarization"]
     sub_queries: list[str] = Field(min_length=1)
 
 
 def _normalize_route_result(question: str, result: RouteResult) -> RouteResult:
+    """Coerce invalid LLM routing output back to a safe single-fact fallback."""
     sub_queries = [part.strip() for part in result.sub_queries if part.strip()]
     if not sub_queries:
         return RouteResult(query_type="single_fact", sub_queries=[question])
@@ -37,6 +42,7 @@ def _normalize_route_result(question: str, result: RouteResult) -> RouteResult:
 
 
 def route_query(question: str, llm: BaseChatModel) -> RouteResult:
+    """Classify ``question`` and return query type plus retrieval sub-queries."""
     prompt = ChatPromptTemplate.from_template(ROUTER_PROMPT)
     try:
         router = llm.with_structured_output(RouteResult)
